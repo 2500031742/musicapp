@@ -6,7 +6,12 @@ const MusicContext = createContext();
 
 export const MusicProvider = ({ children }) => {
   const { currentUser } = useAuth();
-  const audioRef = useRef(new Audio());
+  const audioRef = useRef(null);
+
+  if (!audioRef.current) {
+    audioRef.current = new Audio();
+    audioRef.current.preload = "auto";
+  }
 
   const [songs, setSongs] = useState(() => {
     const saved = localStorage.getItem("music_custom_songs");
@@ -21,15 +26,11 @@ export const MusicProvider = ({ children }) => {
   const [likedSongIds, setLikedSongIds] = useState([]);
   const [playlists, setPlaylists] = useState([]);
 
-  // Load user data whenever currentUser changes
+  // Load user data on user switch
   useEffect(() => {
     if (currentUser?.id) {
-      const userLikesKey = `music_likes_${currentUser.id}`;
-      const userPlaylistsKey = `music_playlists_${currentUser.id}`;
-      
-      const storedLikes = JSON.parse(localStorage.getItem(userLikesKey) || "[]");
-      const storedPlaylists = JSON.parse(localStorage.getItem(userPlaylistsKey) || "[]");
-      
+      const storedLikes = JSON.parse(localStorage.getItem(`music_likes_${currentUser.id}`) || "[]");
+      const storedPlaylists = JSON.parse(localStorage.getItem(`music_playlists_${currentUser.id}`) || "[]");
       setLikedSongIds(storedLikes);
       setPlaylists(storedPlaylists);
     } else {
@@ -37,27 +38,35 @@ export const MusicProvider = ({ children }) => {
       setPlaylists([]);
       if (audioRef.current) {
         audioRef.current.pause();
+        audioRef.current.src = "";
         setIsPlaying(false);
       }
     }
   }, [currentUser]);
 
-  // Audio Event Listeners
+  // Audio event listeners
   useEffect(() => {
     const audio = audioRef.current;
+    if (!audio) return;
 
-    const updateTime = () => setCurrentTime(audio.currentTime || 0);
-    const updateDuration = () => setDuration(audio.duration || 0);
-    const handleEnded = () => playNext();
+    const onTimeUpdate = () => setCurrentTime(audio.currentTime || 0);
+    const onLoadedMetadata = () => setDuration(audio.duration || 0);
+    const onEnded = () => playNext();
+    const onError = (e) => {
+      console.warn("Audio playback error:", audio.src, e);
+      setIsPlaying(false);
+    };
 
-    audio.addEventListener("timeupdate", updateTime);
-    audio.addEventListener("loadedmetadata", updateDuration);
-    audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
 
     return () => {
-      audio.removeEventListener("timeupdate", updateTime);
-      audio.removeEventListener("loadedmetadata", updateDuration);
-      audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
     };
   }, [currentSongIndex, songs]);
 
@@ -67,35 +76,42 @@ export const MusicProvider = ({ children }) => {
     }
   }, [volume]);
 
-  const playSong = (index) => {
-    if (index >= 0 && index < songs.length) {
-      setCurrentSongIndex(index);
-      audioRef.current.src = songs[index].url;
-      audioRef.current.load();
-      audioRef.current.play().then(() => {
-        setIsPlaying(true);
-      }).catch((err) => {
-        console.error("Playback error:", err);
-        setIsPlaying(false);
-      });
+  const playSong = async (index) => {
+    if (index < 0 || index >= songs.length) return;
+    const audio = audioRef.current;
+    setCurrentSongIndex(index);
+
+    try {
+      audio.pause();
+      audio.src = songs[index].url;
+      audio.load();
+      await audio.play();
+      setIsPlaying(true);
+    } catch (err) {
+      console.error("Playback failed for:", songs[index].url, err);
+      setIsPlaying(false);
     }
   };
 
-  const togglePlayPause = () => {
+  const togglePlayPause = async () => {
     if (!songs.length) return;
-    if (!audioRef.current.src) {
+    const audio = audioRef.current;
+
+    if (!audio.src || audio.src === window.location.href) {
       playSong(currentSongIndex);
       return;
     }
+
     if (isPlaying) {
-      audioRef.current.pause();
+      audio.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play().then(() => {
+      try {
+        await audio.play();
         setIsPlaying(true);
-      }).catch((err) => {
-        console.error("Playback error:", err);
-      });
+      } catch (err) {
+        console.error("Error resuming audio:", err);
+      }
     }
   };
 
@@ -116,25 +132,28 @@ export const MusicProvider = ({ children }) => {
     }
   };
 
-  // Fixed Like Button Handler
   const toggleLike = (songId) => {
     if (!currentUser?.id) return;
-    
     setLikedSongIds((prevLikes) => {
-      const isAlreadyLiked = prevLikes.includes(songId);
-      const updatedLikes = isAlreadyLiked
-        ? prevLikes.filter((id) => id !== songId)
-        : [...prevLikes, songId];
-
-      localStorage.setItem(`music_likes_${currentUser.id}`, JSON.stringify(updatedLikes));
-      return updatedLikes;
+      const isLiked = prevLikes.includes(songId);
+      const updated = isLiked ? prevLikes.filter((id) => id !== songId) : [...prevLikes, songId];
+      localStorage.setItem(`music_likes_${currentUser.id}`, JSON.stringify(updated));
+      return updated;
     });
   };
 
+  // --- PLAYLIST OPERATIONS ---
   const createPlaylist = (name) => {
     if (!currentUser?.id || !name.trim()) return;
     const newPlaylist = { id: "pl-" + Date.now(), name, songIds: [] };
     const updated = [...playlists, newPlaylist];
+    setPlaylists(updated);
+    localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
+  };
+
+  const deletePlaylist = (playlistId) => {
+    if (!currentUser?.id) return;
+    const updated = playlists.filter((p) => p.id !== playlistId);
     setPlaylists(updated);
     localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
   };
@@ -151,19 +170,58 @@ export const MusicProvider = ({ children }) => {
     localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
   };
 
+  const removeSongFromPlaylist = (playlistId, songId) => {
+    if (!currentUser?.id) return;
+    const updated = playlists.map((p) => {
+      if (p.id === playlistId) {
+        return { ...p, songIds: p.songIds.filter((id) => id !== songId) };
+      }
+      return p;
+    });
+    setPlaylists(updated);
+    localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
+  };
+
+  // --- SONG LIBRARY OPERATIONS ---
   const addSong = (newSongData) => {
     const created = {
       id: "song-" + Date.now(),
       title: newSongData.title,
       artist: newSongData.artist || "Unknown Artist",
       album: newSongData.album || "Single",
-      duration: "Unknown",
-      cover: newSongData.cover || "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80",
+      duration: "0:00",
+      cover: newSongData.cover || "/covers/cover1.jpg",
       url: newSongData.url
     };
-    const updatedCustom = [...JSON.parse(localStorage.getItem("music_custom_songs") || "[]"), created];
+    const currentCustom = JSON.parse(localStorage.getItem("music_custom_songs") || "[]");
+    const updatedCustom = [...currentCustom, created];
     localStorage.setItem("music_custom_songs", JSON.stringify(updatedCustom));
     setSongs((prev) => [...prev, created]);
+  };
+
+  const deleteSong = (songId) => {
+    // Delete from custom songs
+    const currentCustom = JSON.parse(localStorage.getItem("music_custom_songs") || "[]");
+    const updatedCustom = currentCustom.filter((s) => s.id !== songId);
+    localStorage.setItem("music_custom_songs", JSON.stringify(updatedCustom));
+
+    // Remove from in-memory state
+    setSongs((prev) => prev.filter((s) => s.id !== songId));
+
+    // Cleanup from playlists
+    if (currentUser?.id) {
+      const updatedPlaylists = playlists.map((pl) => ({
+        ...pl,
+        songIds: pl.songIds.filter((id) => id !== songId)
+      }));
+      setPlaylists(updatedPlaylists);
+      localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updatedPlaylists));
+
+      // Cleanup from likes
+      const updatedLikes = likedSongIds.filter((id) => id !== songId);
+      setLikedSongIds(updatedLikes);
+      localStorage.setItem(`music_likes_${currentUser.id}`, JSON.stringify(updatedLikes));
+    }
   };
 
   return (
@@ -186,8 +244,11 @@ export const MusicProvider = ({ children }) => {
         seek,
         toggleLike,
         createPlaylist,
+        deletePlaylist,
         addSongToPlaylist,
-        addSong
+        removeSongFromPlaylist,
+        addSong,
+        deleteSong
       }}
     >
       {children}

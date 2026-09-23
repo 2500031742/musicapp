@@ -16,7 +16,10 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [addSongOpen, setAddSongOpen] = useState(false);
 
-  // Filter songs based on current playlist/likes/search
+  if (!currentUser) {
+    return <LoginScreen />;
+  }
+
   const displayedSongs = useMemo(() => {
     let filtered = songs;
 
@@ -44,11 +47,6 @@ export default function App() {
     return filtered;
   }, [songs, activeTab, likedSongIds, playlists, searchTerm]);
 
-  // If logged out, render the LoginScreen immediately
-  if (!currentUser) {
-    return <LoginScreen />;
-  }
-
   const getHeaderTitle = () => {
     if (activeTab === "all") return "Browse All Tracks";
     if (activeTab === "liked") return "Liked Songs";
@@ -57,7 +55,6 @@ export default function App() {
   };
 
   return (
-    // The key attribute forces an instant clean reset when the user changes
     <div className="app-container" key={currentUser.id}>
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
 
@@ -89,6 +86,7 @@ export default function App() {
                     key={song.id}
                     song={song}
                     index={originalIndex}
+                    currentPlaylistId={activeTab}
                   />
                 );
               })}

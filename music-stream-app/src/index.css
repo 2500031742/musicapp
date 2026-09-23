@@ -618,3 +618,77 @@ body {
   font-size: 13px;
   margin-top: 4px;
 }
+/* Playlist row with delete button */
+.playlist-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.2s;
+  margin-bottom: 4px;
+}
+
+.playlist-item-row:hover,
+.playlist-item-row.active {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+}
+
+.playlist-item-row.active {
+  color: var(--primary);
+}
+
+.playlist-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+  font-size: 13px;
+}
+
+.delete-item-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+  padding: 2px;
+}
+
+.playlist-item-row:hover .delete-item-btn {
+  opacity: 1;
+}
+
+.delete-item-btn:hover {
+  color: #ff5555;
+}
+
+/* Song card actions */
+.action-icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  transition: color 0.2s;
+}
+
+.action-icon-btn.remove-btn:hover {
+  color: #ffaa00;
+}
+
+.action-icon-btn.delete-btn:hover {
+  color: #ff5555;
+}
