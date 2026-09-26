@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Disc3, Heart, ListMusic, Plus, Radio, Trash2 } from "lucide-react";
+import { Disc3, Heart, ListMusic, Plus, Radio, Trash2, Shield } from "lucide-react";
 import { useMusic } from "../context/MusicContext";
 import { useAuth } from "../context/AuthContext";
 
@@ -21,9 +21,7 @@ export default function Sidebar({ activeTab, setActiveTab }) {
     e.stopPropagation();
     if (window.confirm("Are you sure you want to delete this playlist?")) {
       deletePlaylist(playlistId);
-      if (activeTab === playlistId) {
-        setActiveTab("all");
-      }
+      if (activeTab === playlistId) setActiveTab("all");
     }
   };
 
@@ -40,7 +38,7 @@ export default function Sidebar({ activeTab, setActiveTab }) {
           onClick={() => setActiveTab("all")}
         >
           <Radio size={20} />
-          <span>All Songs</span>
+          <span>User Catalog</span>
         </button>
         <button
           className={`nav-item ${activeTab === "liked" ? "active" : ""}`}
@@ -49,6 +47,16 @@ export default function Sidebar({ activeTab, setActiveTab }) {
           <Heart size={20} />
           <span>Liked Songs</span>
         </button>
+
+        {currentUser?.isAdmin && (
+          <button
+            className={`nav-item admin-nav-item ${activeTab === "admin" ? "active" : ""}`}
+            onClick={() => setActiveTab("admin")}
+          >
+            <Shield size={20} color="#1db954" />
+            <span>Admin Console</span>
+          </button>
+        )}
       </nav>
 
       <div className="playlist-section">

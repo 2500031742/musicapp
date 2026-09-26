@@ -1,56 +1,108 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
+import { supabase } from "../supabaseClient";
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState(() => {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchProfile = async (user) => {
+    if (!user) return null;
     try {
-      const saved = localStorage.getItem("music_active_user");
-      return saved ? JSON.parse(saved) : null;
+      const { data } = await supabase
+        .from("profiles")
+        .select("username, role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      return {
+        id: user.id,
+        email: user.email,
+        username: data?.username || user.email.split("@")[0],
+        role: data?.role || "user",
+        isAdmin: (data?.role || "user") === "admin"
+      };
     } catch {
-      return null;
+      return {
+        id: user.id,
+        email: user.email,
+        username: user.email.split("@")[0],
+        role: "user",
+        isAdmin: false
+      };
     }
-  });
+  };
 
-  const register = (username, email, password) => {
-    const existingUsers = JSON.parse(localStorage.getItem("music_users") || "[]");
-    const userExists = existingUsers.some((u) => u.email === email);
-
-    if (userExists) {
-      return { success: false, message: "Email already registered." };
+  useEffect(() => {
+    if (!supabase) {
+      setLoading(false);
+      return;
     }
 
-    const newUser = { id: "user-" + Date.now(), username, email, password };
-    existingUsers.push(newUser);
-    localStorage.setItem("music_users", JSON.stringify(existingUsers));
-    
-    // Write session and immediately set state
-    localStorage.setItem("music_active_user", JSON.stringify(newUser));
-    setCurrentUser(newUser);
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        const profile = await fetchProfile(session.user);
+        setCurrentUser(profile);
+      }
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === "SIGNED_IN" && session?.user) {
+          const profile = await fetchProfile(session.user);
+          setCurrentUser(profile);
+          setLoading(false);
+        } else if (event === "SIGNED_OUT") {
+          setCurrentUser(null);
+          setLoading(false);
+        }
+      }
+    );
+
+    return () => subscription?.unsubscribe();
+  }, []);
+
+  const register = async (username, email, password) => {
+    if (!supabase) return { success: false, message: "Database not configured." };
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) return { success: false, message: error.message };
+
+    if (data?.user) {
+      await supabase.from("profiles").insert([
+        { id: data.user.id, username, email, role: "user" }
+      ]);
+      setCurrentUser({
+        id: data.user.id,
+        email: data.user.email,
+        username: username || email.split("@")[0],
+        role: "user",
+        isAdmin: false
+      });
+    }
     return { success: true };
   };
 
-  const login = (email, password) => {
-    const existingUsers = JSON.parse(localStorage.getItem("music_users") || "[]");
-    const user = existingUsers.find((u) => u.email === email && u.password === password);
+  const login = async (email, password) => {
+    if (!supabase) return { success: false, message: "Database not configured." };
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { success: false, message: error.message };
 
-    if (!user) {
-      return { success: false, message: "Invalid email or password." };
+    if (data?.user) {
+      const profile = await fetchProfile(data.user);
+      setCurrentUser(profile);
     }
-
-    // Write session and immediately set state
-    localStorage.setItem("music_active_user", JSON.stringify(user));
-    setCurrentUser(user);
     return { success: true };
   };
 
-  const logout = () => {
-    localStorage.removeItem("music_active_user");
+  const logout = async () => {
     setCurrentUser(null);
+    if (supabase) await supabase.auth.signOut();
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, register, login, logout }}>
+    <AuthContext.Provider value={{ currentUser, register, login, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

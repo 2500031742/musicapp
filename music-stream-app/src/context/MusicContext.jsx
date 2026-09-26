@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import { DEFAULT_SONGS } from "../data/defaultSongs";
 import { useAuth } from "./AuthContext";
+import { supabase } from "../supabaseClient";
 
 const MusicContext = createContext();
 
@@ -13,11 +14,7 @@ export const MusicProvider = ({ children }) => {
     audioRef.current.preload = "auto";
   }
 
-  const [songs, setSongs] = useState(() => {
-    const saved = localStorage.getItem("music_custom_songs");
-    return saved ? [...DEFAULT_SONGS, ...JSON.parse(saved)] : DEFAULT_SONGS;
-  });
-
+  const [songs, setSongs] = useState(DEFAULT_SONGS);
   const [currentSongIndex, setCurrentSongIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -26,14 +23,10 @@ export const MusicProvider = ({ children }) => {
   const [likedSongIds, setLikedSongIds] = useState([]);
   const [playlists, setPlaylists] = useState([]);
 
-  // Load user data on user switch
+  // Fetch Cloud Songs, Liked IDs, and Playlists when user logs in
   useEffect(() => {
-    if (currentUser?.id) {
-      const storedLikes = JSON.parse(localStorage.getItem(`music_likes_${currentUser.id}`) || "[]");
-      const storedPlaylists = JSON.parse(localStorage.getItem(`music_playlists_${currentUser.id}`) || "[]");
-      setLikedSongIds(storedLikes);
-      setPlaylists(storedPlaylists);
-    } else {
+    if (!currentUser) {
+      setSongs(DEFAULT_SONGS);
       setLikedSongIds([]);
       setPlaylists([]);
       if (audioRef.current) {
@@ -41,7 +34,44 @@ export const MusicProvider = ({ children }) => {
         audioRef.current.src = "";
         setIsPlaying(false);
       }
+      return;
     }
+
+    const fetchData = async () => {
+      // 1. Fetch Cloud Songs
+      const { data: dbSongs } = await supabase.from("songs").select("*");
+      if (dbSongs && dbSongs.length > 0) {
+        setSongs([...DEFAULT_SONGS, ...dbSongs]);
+      } else {
+        setSongs(DEFAULT_SONGS);
+      }
+
+      // 2. Fetch User Likes
+      const { data: dbLikes } = await supabase
+        .from("likes")
+        .select("song_id")
+        .eq("user_id", currentUser.id);
+      if (dbLikes) {
+        setLikedSongIds(dbLikes.map((item) => item.song_id));
+      }
+
+      // 3. Fetch User Playlists
+      const { data: dbPlaylists } = await supabase
+        .from("playlists")
+        .select("*")
+        .eq("user_id", currentUser.id);
+      if (dbPlaylists) {
+        setPlaylists(
+          dbPlaylists.map((p) => ({
+            id: p.id,
+            name: p.name,
+            songIds: p.song_ids || []
+          }))
+        );
+      }
+    };
+
+    fetchData();
   }, [currentUser]);
 
   // Audio event listeners
@@ -110,7 +140,7 @@ export const MusicProvider = ({ children }) => {
         await audio.play();
         setIsPlaying(true);
       } catch (err) {
-        console.error("Error resuming audio:", err);
+        console.error("Error resuming playback:", err);
       }
     }
   };
@@ -132,96 +162,106 @@ export const MusicProvider = ({ children }) => {
     }
   };
 
-  const toggleLike = (songId) => {
+  // Cloud Liked Songs Toggle
+  const toggleLike = async (songId) => {
     if (!currentUser?.id) return;
-    setLikedSongIds((prevLikes) => {
-      const isLiked = prevLikes.includes(songId);
-      const updated = isLiked ? prevLikes.filter((id) => id !== songId) : [...prevLikes, songId];
-      localStorage.setItem(`music_likes_${currentUser.id}`, JSON.stringify(updated));
-      return updated;
-    });
+    const isLiked = likedSongIds.includes(songId);
+
+    // Optimistic UI update
+    setLikedSongIds((prev) =>
+      isLiked ? prev.filter((id) => id !== songId) : [...prev, songId]
+    );
+
+    if (isLiked) {
+      await supabase
+        .from("likes")
+        .delete()
+        .match({ user_id: currentUser.id, song_id: songId });
+    } else {
+      await supabase
+        .from("likes")
+        .insert([{ user_id: currentUser.id, song_id: songId }]);
+    }
   };
 
-  // --- PLAYLIST OPERATIONS ---
-  const createPlaylist = (name) => {
+  // Cloud Playlist Actions
+  const createPlaylist = async (name) => {
     if (!currentUser?.id || !name.trim()) return;
-    const newPlaylist = { id: "pl-" + Date.now(), name, songIds: [] };
-    const updated = [...playlists, newPlaylist];
-    setPlaylists(updated);
-    localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
+
+    const { data } = await supabase
+      .from("playlists")
+      .insert([{ user_id: currentUser.id, name, song_ids: [] }])
+      .select()
+      .single();
+
+    if (data) {
+      setPlaylists((prev) => [...prev, { id: data.id, name: data.name, songIds: [] }]);
+    }
   };
 
-  const deletePlaylist = (playlistId) => {
+  const deletePlaylist = async (playlistId) => {
     if (!currentUser?.id) return;
-    const updated = playlists.filter((p) => p.id !== playlistId);
-    setPlaylists(updated);
-    localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
+    setPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
+    await supabase.from("playlists").delete().eq("id", playlistId);
   };
 
-  const addSongToPlaylist = (playlistId, songId) => {
+  const addSongToPlaylist = async (playlistId, songId) => {
     if (!currentUser?.id) return;
-    const updated = playlists.map((p) => {
-      if (p.id === playlistId && !p.songIds.includes(songId)) {
-        return { ...p, songIds: [...p.songIds, songId] };
-      }
-      return p;
-    });
-    setPlaylists(updated);
-    localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
+    const target = playlists.find((p) => p.id === playlistId);
+    if (!target || target.songIds.includes(songId)) return;
+
+    const updatedSongIds = [...target.songIds, songId];
+
+    setPlaylists((prev) =>
+      prev.map((p) => (p.id === playlistId ? { ...p, songIds: updatedSongIds } : p))
+    );
+
+    await supabase
+      .from("playlists")
+      .update({ song_ids: updatedSongIds })
+      .eq("id", playlistId);
   };
 
-  const removeSongFromPlaylist = (playlistId, songId) => {
+  const removeSongFromPlaylist = async (playlistId, songId) => {
     if (!currentUser?.id) return;
-    const updated = playlists.map((p) => {
-      if (p.id === playlistId) {
-        return { ...p, songIds: p.songIds.filter((id) => id !== songId) };
-      }
-      return p;
-    });
-    setPlaylists(updated);
-    localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updated));
+    const target = playlists.find((p) => p.id === playlistId);
+    if (!target) return;
+
+    const updatedSongIds = target.songIds.filter((id) => id !== songId);
+
+    setPlaylists((prev) =>
+      prev.map((p) => (p.id === playlistId ? { ...p, songIds: updatedSongIds } : p))
+    );
+
+    await supabase
+      .from("playlists")
+      .update({ song_ids: updatedSongIds })
+      .eq("id", playlistId);
   };
 
-  // --- SONG LIBRARY OPERATIONS ---
-  const addSong = (newSongData) => {
-    const created = {
-      id: "song-" + Date.now(),
+  // Cloud Add / Delete Custom Songs
+  const addSong = async (newSongData) => {
+    if (!currentUser?.id) return;
+
+    const songPayload = {
       title: newSongData.title,
       artist: newSongData.artist || "Unknown Artist",
       album: newSongData.album || "Single",
       duration: "0:00",
       cover: newSongData.cover || "/covers/cover1.jpg",
-      url: newSongData.url
+      url: newSongData.url,
+      created_by: currentUser.id
     };
-    const currentCustom = JSON.parse(localStorage.getItem("music_custom_songs") || "[]");
-    const updatedCustom = [...currentCustom, created];
-    localStorage.setItem("music_custom_songs", JSON.stringify(updatedCustom));
-    setSongs((prev) => [...prev, created]);
+
+    const { data } = await supabase.from("songs").insert([songPayload]).select().single();
+    if (data) {
+      setSongs((prev) => [...prev, data]);
+    }
   };
 
-  const deleteSong = (songId) => {
-    // Delete from custom songs
-    const currentCustom = JSON.parse(localStorage.getItem("music_custom_songs") || "[]");
-    const updatedCustom = currentCustom.filter((s) => s.id !== songId);
-    localStorage.setItem("music_custom_songs", JSON.stringify(updatedCustom));
-
-    // Remove from in-memory state
+  const deleteSong = async (songId) => {
     setSongs((prev) => prev.filter((s) => s.id !== songId));
-
-    // Cleanup from playlists
-    if (currentUser?.id) {
-      const updatedPlaylists = playlists.map((pl) => ({
-        ...pl,
-        songIds: pl.songIds.filter((id) => id !== songId)
-      }));
-      setPlaylists(updatedPlaylists);
-      localStorage.setItem(`music_playlists_${currentUser.id}`, JSON.stringify(updatedPlaylists));
-
-      // Cleanup from likes
-      const updatedLikes = likedSongIds.filter((id) => id !== songId);
-      setLikedSongIds(updatedLikes);
-      localStorage.setItem(`music_likes_${currentUser.id}`, JSON.stringify(updatedLikes));
-    }
+    await supabase.from("songs").delete().eq("id", songId);
   };
 
   return (
